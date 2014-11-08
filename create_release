@@ -1,0 +1,120 @@
+#!/usr/bin/env ruby
+
+require 'fileutils'
+
+USAGE = <<-EOS
+--------------------------------------------------------------------------------
+  create_release <module_name> <module_git_url> <version_file>
+--------------------------------------------------------------------------------
+  <module_name>
+    The module for which to create the release
+
+  <module_git_url>
+    The url of the git repo for this module
+
+  <version_file>
+    The file containing the version info in symantic versioning format, such as "version '1.0.0'"
+
+EOS
+
+def create_workspace(module_git_url, module_workspace)
+  git_clone_cmd = "git clone -b master #{module_git_url} #{module_workspace} --depth 1"
+  clone_out = `#{git_clone_cmd}`
+  puts "clone output: \n#{clone_out}"
+end
+
+def delete_workspace(module_workspace)
+  FileUtils.rm_r module_workspace 
+end
+
+# increment patch portion of version found in v_file. Return new version number (major.minor.patch)
+def increment_version_in_file(version_file, module_workspace)
+
+  regex = /version\s+['"]RELEASE_(\d+)\.(\d+)\.(\d+)['"]/
+  new_version = nil
+
+  contents = File.read("#{module_workspace}/#{version_file}")
+  puts "original version = #{contents}"
+
+  new_contents = contents.gsub(regex) do |params|
+    major, minor, patch = params.match(regex).captures
+    new_patch = patch.to_i + 1
+    new_version = "RELEASE_#{major}.#{minor}.#{new_patch}"
+    """
+    version \t'RELEASE_#{major}.#{minor}.#{new_patch}'
+    """.strip
+  end
+  puts "after gsub = #{new_contents}"
+  file = File.open("#{module_workspace}/#{version_file}", "w")
+  file.write(new_contents)
+  file.close()
+  if(new_version != nil)
+    return new_version
+  else
+    puts "There was a problem incrementing the version in #{module_workspace}/#{version_file}, so cannot create release."
+  end
+
+end
+
+def create_and_push_tag(module_workspace, version_file, tag_name)
+
+  git_work_dir = File.expand_path(module_workspace)
+  git_dir = git_work_dir + "/.git" 
+  puts "git_work_dir = #{git_work_dir}"
+  puts "git_dir = #{git_dir}"
+
+  commit_msg = "CreateRelease: Incremented version to #{tag_name}"
+  git_cmd_prefix = "git --git-dir=#{git_dir} --work-tree=#{git_work_dir}" 
+  git_status_cmd = "#{git_cmd_prefix} status"
+
+  git_commit_cmd = "#{git_cmd_prefix} add #{version_file}"
+  git_commit_cmd += " && "
+  git_commit_cmd += "#{git_cmd_prefix} commit -m \"#{commit_msg}\""
+  git_commit_cmd += " && "
+  git_commit_cmd += "#{git_cmd_prefix} push origin master"
+
+  git_tag_cmd = "#{git_cmd_prefix} tag #{tag_name}"
+  git_tag_cmd += " && "
+  git_tag_cmd += "#{git_cmd_prefix} push --tags"
+
+  puts "executing git status:\n#{git_status_cmd}"
+  status_result = `#{git_status_cmd}`
+  if(status_result.include? "modified:   #{version_file}")
+    puts "executing git commit:\n#{git_commit_cmd}\n"
+    commit_result = `#{git_commit_cmd}`
+    puts "commit results:\n#{commit_result}\n"
+  else
+    puts "git doesn't show #{version_file} as modified. Aborting create_release"
+    exit(false)
+  end
+  puts "executing git tag:\n#{git_tag_cmd}\n"
+  tag_result = `#{git_tag_cmd}`
+  puts "tag results:\n#{tag_result}\n"
+
+end
+
+# parse arguments
+def create_release(args)
+  if(args == nil || args[0] == nil || args[1] == nil)
+    puts USAGE
+    exit(false)
+  elsif (args[0].include?("help"))
+    puts USAGE
+    exit(true)
+  end
+
+
+  begin
+    module_name = args[0]
+    module_git_url = args[1]
+    version_file   = args[2] || 'Modulefile'
+    module_workspace = "/tmp/#{module_name}"
+    create_workspace(module_git_url, module_workspace)
+    new_version = increment_version_in_file(version_file, module_workspace)
+    puts "new version = #{new_version}"
+    create_and_push_tag(module_workspace, version_file, new_version)
+    delete_workspace(module_workspace)
+  end
+end
+
+create_release(ARGV)
